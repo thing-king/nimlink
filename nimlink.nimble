@@ -1,0 +1,14 @@
+# Package
+
+version       = "0.1.0"
+author        = "savannt"
+description   = "Links Nim packages via `srcDir` correctly"
+license       = "MIT"
+srcDir        = "src"
+bin           = @["nimlink"]
+
+
+# Dependencies
+
+requires "nim >= 1.0.0"
+requires "colors"
