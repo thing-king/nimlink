@@ -1,10 +1,19 @@
 import os
+import times
+import json
 import strutils
 import sequtils
-import pkg/colors  # For terminal coloring similar to npm colors
+import pkg/colors  # For terminal coloring
+
+type
+  RepoInfo = object
+    name: string  # Name of the repository
+    path: string  # Full path to the repository
+    srcDir: string  # Source directory (relative to path)
+    date: string  # Date when added
 
 proc extractSrcDir(nimbleFile: string): string =
-  # This is a simplified approach to extract srcDir from a nimble file
+  # Extract srcDir from a nimble file
   result = ""
   for line in lines(nimbleFile):
     let trimmedLine = line.strip()
@@ -16,135 +25,214 @@ proc extractSrcDir(nimbleFile: string): string =
         result = parts[1].strip().strip(chars={'"', '\''})
         break
 
+proc getDatabasePath(): string =
+  return getHomeDir() / ".nimlink"
+
+proc readDatabase(): JsonNode =
+  let dbPath = getDatabasePath()
+  if not fileExists(dbPath):
+    # Create empty database if it doesn't exist
+    let emptyDb = %* {}
+    writeFile(dbPath, $emptyDb)
+    return emptyDb
+  
+  try:
+    let content = readFile(dbPath)
+    return parseJson(content)
+  except:
+    echo "Error: ".red & "Failed to read database. Creating new one."
+    let emptyDb = %* {}
+    writeFile(dbPath, $emptyDb)
+    return emptyDb
+
+proc writeDatabase(db: JsonNode) =
+  let dbPath = getDatabasePath()
+  writeFile(dbPath, pretty(db))
+
+proc getRepoName(repoPath: string): string =
+  # Extract repo name from path
+  result = extractFilename(repoPath)
+
+proc findNimbleFile(repoPath: string): string =
+  # Find a .nimble file in the repository
+  let nimbleFiles = toSeq(walkFiles(repoPath / "*.nimble"))
+  if nimbleFiles.len == 0:
+    return ""
+  return nimbleFiles[0]
+
+proc registerRepo(repoPath: string) =
+  # Get absolute path
+  let absPath = 
+    if isAbsolute(repoPath): repoPath
+    else: getCurrentDir() / repoPath
+  
+  # Check if directory exists
+  if not dirExists(absPath):
+    echo "Error: ".red & "Directory does not exist: " & absPath
+    return
+  
+  # Find nimble file
+  let nimbleFile = findNimbleFile(absPath)
+  if nimbleFile == "":
+    echo "Error: ".red & "No .nimble file found in " & absPath
+    return
+  
+  # Extract repository name from nimble file
+  let repoName = splitFile(nimbleFile).name
+  
+  # Extract srcDir from nimble file
+  var srcDir = extractSrcDir(nimbleFile)
+  if srcDir == "":
+    srcDir = "."  # Default to repo root
+  
+  # Add to database
+  var db = readDatabase()
+  
+  let repoInfo = %* {
+    "name": repoName,
+    "path": absPath,
+    "srcDir": srcDir,
+    "date": $now()
+  }
+  
+  db[repoName] = repoInfo
+  writeDatabase(db)
+  
+  echo "Success: ".green & "Registered repository " & repoName.bold.yellow
+  echo "Path: ".blue & absPath
+  echo "Source directory: ".blue & srcDir
+
+proc listRepos() =
+  let db = readDatabase()
+  
+  if db.len == 0:
+    echo "No repositories registered. Use 'nimlink' in a repository to register it.".yellow
+    return
+  
+  echo "Registered repositories:".bold
+  for repoName, repoInfo in db:
+    echo repoName.bold.green & ":"
+    echo "  Path: " & repoInfo["path"].getStr()
+    echo "  Source: " & repoInfo["srcDir"].getStr()
+    echo "  Added: " & repoInfo["date"].getStr()
+
+proc installRepo(repoName: string, targetDir: string = "") =
+  let db = readDatabase()
+  
+  # Check if repo exists in database
+  if not db.hasKey(repoName):
+    echo "Error: ".red & "Repository not found: " & repoName
+    echo "Use 'nimlink --list' to see available repositories."
+    return
+  
+  # Get repo info
+  let repoInfo = db[repoName]
+  let repoPath = repoInfo["path"].getStr()
+  let srcDir = repoInfo["srcDir"].getStr()
+  
+  # Determine source path
+  let sourcePath = repoPath / srcDir
+  
+  # Determine target path
+  var targetPath = 
+    if targetDir == "": getCurrentDir() / repoName
+    else: getCurrentDir() / targetDir / repoName
+  
+  # Check if source exists
+  if not dirExists(sourcePath):
+    echo "Error: ".red & "Source directory not found: " & sourcePath
+    return
+  
+  # Create target directory if it doesn't exist
+  let targetParent = parentDir(targetPath)
+  if not dirExists(targetParent) and targetParent != "":
+    createDir(targetParent)
+  
+  # Check if target already exists
+  if dirExists(targetPath) or fileExists(targetPath):
+    echo "Error: ".red & "Target already exists: " & targetPath
+    return
+  
+  # Create symlink
+  try:
+    createSymlink(sourcePath, targetPath)
+    echo "Success: ".green & "Created symlink for " & repoName.bold.yellow
+    echo "Source: ".blue & sourcePath
+    echo "Target: ".blue & targetPath
+  except:
+    echo "Error: ".red & "Failed to create symlink"
+    echo "Source: ".red & sourcePath
+    echo "Target: ".red & targetPath
+    echo "You may need administrator privileges."
+
 proc showUsage() =
-  echo "nimdevel - A better alternative to nimble develop".bold
-  echo "Usage: nimdevel [OPTIONS]".yellow
+  echo "nimlink - Simple repository linking tool for Nim".bold
+  echo "Usage: nimlink [OPTIONS] [REPO_NAME]".yellow
   echo ""
   echo "Options:"
   echo "  -h, --help     Show this help"
-  echo "  -v, --version  Show version information"
-  echo "  -l, --list     List all nimble links"
-  echo "  -s, --show     Show details of the current package link"
+  echo "  -l, --list     List registered repositories"
+  echo "  -i, --install  Install repository (requires REPO_NAME)"
+  echo "  -t, --target   Target directory for installation (used with --install)"
   echo ""
-  echo "Run in a directory containing a .nimble file to create"
-  echo "a development link that respects the srcDir setting."
+  echo "Examples:".bold
+  echo "  nimlink                 # Register current repository"
+  echo "  nimlink --list          # List all registered repositories"
+  echo "  nimlink --install repo  # Install 'repo' in current directory"
 
-proc listLinks(nimbleDir: string) =
-  let linksDir = nimbleDir / "links"
-  if not dirExists(linksDir):
-    echo "No links directory found at: ".yellow & linksDir
-    return
-  
-  echo "Nimble development links:".bold
-  var found = false
-  for kind, path in walkDir(linksDir):
-    if kind == pcDir:
-      let packageName = extractFilename(path).split("-#")[0]
-      let linkFile = path / packageName & ".nimble-link"
-      
-      if fileExists(linkFile):
-        found = true
-        let linkContent = readFile(linkFile).strip().split("\n")
-        let srcDir = if linkContent.len > 0: linkContent[0] else: "Unknown"
-        
-        echo packageName.bold.green & ": " & srcDir
-  
-  if not found:
-    echo "No development links found.".yellow
-
-proc showCurrentLink(nimbleDir: string, nimbleBaseName: string) =
-  let linkDir = nimbleDir / "links" / nimbleBaseName & "-#head"
-  let linkFile = linkDir / nimbleBaseName & ".nimble-link"
-  
-  if fileExists(linkFile):
-    let linkContent = readFile(linkFile).strip().split("\n")
-    echo "Package: ".blue & nimbleBaseName.bold.yellow
-    echo "Source directory: ".blue & (if linkContent.len > 0: linkContent[0] else: "Unknown")
-    echo "Nimble file: ".blue & (if linkContent.len > 1: linkContent[1] else: "Unknown")
-  else:
-    echo "No link found for package: ".red & nimbleBaseName
-    
-proc nimDevelop() =
-  # Check for help/version flags
+proc main() =
   let args = commandLineParams()
   
-  # Get the nimble dir (with env var support)
-  var nimbleDir = getEnv("NIMBLE_DIR")
-  if nimbleDir == "":
-    # Default location if not set
-    nimbleDir = getHomeDir() / ".nimble"
+  if args.len == 0:
+    # Register current repository
+    registerRepo(getCurrentDir())
+    return
   
-  for arg in args:
-    if arg in ["-h", "--help"]:
+  var i = 0
+  while i < args.len:
+    case args[i]
+    of "-h", "--help":
       showUsage()
       return
-    elif arg in ["-v", "--version"]:
-      echo "nimdevel v0.1.0"
+      
+    of "-l", "--list":
+      listRepos()
       return
-    elif arg in ["-l", "--list"]:
-      listLinks(nimbleDir)
+      
+    of "-i", "--install":
+      if i + 1 >= args.len:
+        echo "Error: ".red & "No repository name provided for installation"
+        return
+      
+      var targetDir = ""
+      # Check for target option
+      if i + 2 < args.len and args[i + 2] in ["-t", "--target"]:
+        if i + 3 < args.len:
+          targetDir = args[i + 3]
+          installRepo(args[i + 1], targetDir)
+          return
+        else:
+          echo "Error: ".red & "No target directory provided"
+          return
+      # Check if the target is already provided
+      elif i + 2 < args.len and args[i + 2] notin ["-t", "--target"]:
+        targetDir = args[i + 2]
+        installRepo(args[i + 1], targetDir)
+        return
+      else:
+        installRepo(args[i + 1])
+        return
+        
+    of "-t", "--target":
+      echo "Error: ".red & "--target must be used with --install"
       return
-  
-  # Get the current directory (assuming this is the package directory)
-  let packageDir = getCurrentDir()
-  
-  # Find the nimble file
-  let nimbleFiles = toSeq(walkFiles(packageDir / "*.nimble"))
-  if nimbleFiles.len == 0:
-    echo "Error: ".red & "No nimble file found in the current directory"
-    return
-  
-  let nimbleFile = nimbleFiles[0]
-  let nimbleFileName = extractFilename(nimbleFile)
-  let nimbleBaseName = nimbleFileName.split(".")[0]
-  
-  # Check if --show argument is provided
-  for arg in args:
-    if arg in ["-s", "--show"]:
-      showCurrentLink(nimbleDir, nimbleBaseName)
+      
+    else:
+      echo "Unknown option: ".red & args[i]
+      showUsage()
       return
-  
-  # Extract srcDir from the nimble file
-  var srcDir = extractSrcDir(nimbleFile)
-  
-  # If srcDir is found and is relative, make it absolute
-  if srcDir != "":
-    if not srcDir.isAbsolute():
-      srcDir = packageDir / srcDir
-  else:
-    # Default to package directory if srcDir is empty
-    srcDir = packageDir
-  
-  # Create the link directory path
-  let linkDir = nimbleDir / "links" / nimbleBaseName & "-#head"
-  
-  # Create the directory structure if it doesn't exist
-  if not dirExists(linkDir):
-    try:
-      createDir(linkDir)
-    except:
-      echo "Error: ".red & "Failed to create directory: " & linkDir
-      return
-  
-  # Remove existing link file if it exists
-  let linkFile = linkDir / nimbleBaseName & ".nimble-link"
-  if fileExists(linkFile):
-    try:
-      removeFile(linkFile)
-    except:
-      echo "Error: ".red & "Failed to remove existing link file: " & linkFile
-      return
-  
-  # Create the nimble link file with the correct two-line format
-  try:
-    # Write both the source directory path and the nimble file path
-    writeFile(linkFile, srcDir & "\n" & nimbleFile & "\n")
-    echo "Success: ".green & "Created development link for " & nimbleBaseName.bold.yellow
-    echo "Link points to: ".blue & srcDir
-    echo "Nimble file: ".blue & nimbleFile
-  except:
-    echo "Error: ".red & "Failed to create link file: " & linkFile
-    return
+      
+    inc i
 
 when isMainModule:
-  nimDevelop()
+  main()
