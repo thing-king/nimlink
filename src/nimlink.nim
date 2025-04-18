@@ -23,19 +23,66 @@ proc showUsage() =
   echo "Options:"
   echo "  -h, --help     Show this help"
   echo "  -v, --version  Show version information"
+  echo "  -l, --list     List all nimble links"
+  echo "  -s, --show     Show details of the current package link"
   echo ""
   echo "Run in a directory containing a .nimble file to create"
   echo "a development link that respects the srcDir setting."
 
+proc listLinks(nimbleDir: string) =
+  let linksDir = nimbleDir / "links"
+  if not dirExists(linksDir):
+    echo "No links directory found at: ".yellow & linksDir
+    return
+  
+  echo "Nimble development links:".bold
+  var found = false
+  for kind, path in walkDir(linksDir):
+    if kind == pcDir:
+      let packageName = extractFilename(path).split("-#")[0]
+      let linkFile = path / packageName & ".nimble-link"
+      
+      if fileExists(linkFile):
+        found = true
+        let linkContent = readFile(linkFile).strip().split("\n")
+        let srcDir = if linkContent.len > 0: linkContent[0] else: "Unknown"
+        
+        echo packageName.bold.green & ": " & srcDir
+  
+  if not found:
+    echo "No development links found.".yellow
+
+proc showCurrentLink(nimbleDir: string, nimbleBaseName: string) =
+  let linkDir = nimbleDir / "links" / nimbleBaseName & "-#head"
+  let linkFile = linkDir / nimbleBaseName & ".nimble-link"
+  
+  if fileExists(linkFile):
+    let linkContent = readFile(linkFile).strip().split("\n")
+    echo "Package: ".blue & nimbleBaseName.bold.yellow
+    echo "Source directory: ".blue & (if linkContent.len > 0: linkContent[0] else: "Unknown")
+    echo "Nimble file: ".blue & (if linkContent.len > 1: linkContent[1] else: "Unknown")
+  else:
+    echo "No link found for package: ".red & nimbleBaseName
+    
 proc nimDevelop() =
   # Check for help/version flags
   let args = commandLineParams()
+  
+  # Get the nimble dir (with env var support)
+  var nimbleDir = getEnv("NIMBLE_DIR")
+  if nimbleDir == "":
+    # Default location if not set
+    nimbleDir = getHomeDir() / ".nimble"
+  
   for arg in args:
     if arg in ["-h", "--help"]:
       showUsage()
       return
     elif arg in ["-v", "--version"]:
       echo "nimdevel v0.1.0"
+      return
+    elif arg in ["-l", "--list"]:
+      listLinks(nimbleDir)
       return
   
   # Get the current directory (assuming this is the package directory)
@@ -51,6 +98,12 @@ proc nimDevelop() =
   let nimbleFileName = extractFilename(nimbleFile)
   let nimbleBaseName = nimbleFileName.split(".")[0]
   
+  # Check if --show argument is provided
+  for arg in args:
+    if arg in ["-s", "--show"]:
+      showCurrentLink(nimbleDir, nimbleBaseName)
+      return
+  
   # Extract srcDir from the nimble file
   var srcDir = extractSrcDir(nimbleFile)
   
@@ -61,12 +114,6 @@ proc nimDevelop() =
   else:
     # Default to package directory if srcDir is empty
     srcDir = packageDir
-  
-  # Get the nimble dir (with env var support)
-  var nimbleDir = getEnv("NIMBLE_DIR")
-  if nimbleDir == "":
-    # Default location if not set
-    nimbleDir = getHomeDir() / ".nimble"
   
   # Create the link directory path
   let linkDir = nimbleDir / "links" / nimbleBaseName & "-#head"
@@ -88,11 +135,13 @@ proc nimDevelop() =
       echo "Error: ".red & "Failed to remove existing link file: " & linkFile
       return
   
-  # Create the nimble link file
+  # Create the nimble link file with the correct two-line format
   try:
-    writeFile(linkFile, srcDir)
+    # Write both the source directory path and the nimble file path
+    writeFile(linkFile, srcDir & "\n" & nimbleFile)
     echo "Success: ".green & "Created development link for " & nimbleBaseName.bold.yellow
     echo "Link points to: ".blue & srcDir
+    echo "Nimble file: ".blue & nimbleFile
   except:
     echo "Error: ".red & "Failed to create link file: " & linkFile
     return
