@@ -68,11 +68,17 @@ proc ensureLinksDir(projectDir: string = getCurrentDir()): string =
     createDir(linksPath)
   return linksPath
 
-proc updateConfig(projectDir: string, packageName: string, action: string) =
+proc updateConfig(projectDir: string, packageName: string, sourcePath: string, action: string, isDirect: bool = false) =
   # Update the nim.cfg file to include or remove a package path
   let configPath = projectDir / CONFIG_FILENAME
-  let linksDir = getLinksDir()
-  let pathLine = "--path=\"" & linksDir & "/" & packageName & "\""
+  
+  # Create the appropriate path line
+  var pathLine: string
+  if isDirect:
+    pathLine = "--path=\"" & sourcePath & "\""
+  else:
+    let linksDir = getLinksDir()
+    pathLine = "--path=\"" & linksDir & "/" & packageName & "\""
   
   # Create config file if it doesn't exist
   if not fileExists(configPath):
@@ -191,7 +197,7 @@ proc removeCmd(packageName: string) =
   
   echo "Success: ".green & "Removed " & packageName.bold.yellow & " from database"
 
-proc installCmd(packageName: string, projectDir: string = getCurrentDir()) =
+proc installCmd(packageName: string, projectDir: string = getCurrentDir(), isDirect: bool = false) =
   # Install a package by creating a symlink in the links directory
   let db = readDatabase()
   
@@ -213,6 +219,16 @@ proc installCmd(packageName: string, projectDir: string = getCurrentDir()) =
     else:
       repoPath
   
+  if isDirect:
+    # Direct mode: just add path to config file
+    updateConfig(projectDir, packageName, sourcePath, "add", true)
+    echo "Success: ".green & "Added " & packageName.bold.yellow & " path directly to nim.cfg"
+    echo "Path: ".blue & sourcePath
+    echo "You can now use: ".green & "import " & packageName & " from anywhere in your project"
+    return
+    
+  # Regular mode: create symlink and add its path to config
+  
   # Ensure links directory exists
   let linksDir = ensureLinksDir(projectDir)
   
@@ -231,15 +247,41 @@ proc installCmd(packageName: string, projectDir: string = getCurrentDir()) =
     echo "To: ".blue & linkPath
     
     # Update nim.cfg to include the links directory
-    updateConfig(projectDir, packageName, "add")
+    updateConfig(projectDir, packageName, sourcePath, "add", false)
     
     echo "You can now use: ".green & "import " & packageName & " from anywhere in your project"
   except:
     echo "Error: ".red & "Failed to create symlink"
     echo "You may need administrator privileges on Windows"
 
-proc uninstallCmd(packageName: string, projectDir: string = getCurrentDir()) =
+proc uninstallCmd(packageName: string, projectDir: string = getCurrentDir(), isDirect: bool = false) =
   # Remove a symlink from the links directory
+  if isDirect:
+    # Direct mode: find the package to get its source path
+    let db = readDatabase()
+    if not db.hasKey(packageName):
+      echo "Error: ".red & "Package " & packageName.bold & " not found in database"
+      return
+      
+    # Get package info
+    let info = db[packageName]
+    let repoPath = info["path"].getStr()
+    let srcDir = info["srcDir"].getStr()
+    
+    # Determine source path
+    let sourcePath = 
+      if srcDir != "":
+        if isAbsolute(srcDir): srcDir
+        else: repoPath / srcDir
+      else:
+        repoPath
+        
+    # Remove from config file
+    updateConfig(projectDir, packageName, sourcePath, "remove", true)
+    echo "Success: ".green & "Removed " & packageName.bold.yellow & " path from nim.cfg"
+    return
+  
+  # Regular mode: remove symlink and path
   let linksDir = projectDir / getLinksDir()
   let linkPath = linksDir / packageName
   
@@ -265,7 +307,7 @@ proc uninstallCmd(packageName: string, projectDir: string = getCurrentDir()) =
     echo "From: ".blue & linkPath
     
     # Update nim.cfg to remove the package path
-    updateConfig(projectDir, packageName, "remove")
+    updateConfig(projectDir, packageName, "", "remove", false)
   except:
     echo "Error: ".red & "Failed to remove symlink: " & linkPath
 
@@ -274,20 +316,24 @@ proc showHelp() =
   echo ""
   echo "Commands:".cyan
   echo "  nimlink                 Register current package in database"
-  echo "  nimlink list            List registered packages"
-  echo "  nimlink install NAME    Install package to project links directory"
-  echo "  nimlink uninstall NAME  Remove installed package from links directory"
-  echo "  nimlink remove NAME     Remove package from database"
+  echo "  nimlink list, l         List registered packages"
+  echo "  nimlink install, i NAME Install package to project links directory"
+  echo "  nimlink uninstall, u NAME  Remove installed package from links directory"
+  echo "  nimlink remove, rm NAME    Remove package from database"
   echo "  nimlink help            Show this help"
+  echo ""
+  echo "Options:".cyan
+  echo "  --direct, -d            Add direct path in nim.cfg without creating symlinks"
   echo ""
   echo "Environment Variables:".cyan
   echo "  NIMLINK_DIR             Custom links directory name (default: nimlinks)"
   echo ""
   echo "Examples:".bold.blue
-  echo "  nimlink                      # Register current directory"
-  echo "  nimlink install mylibrary    # Link mylibrary to project"
-  echo "  nimlink uninstall mylibrary  # Remove link from project"
-  echo "  nimlink remove mylibrary     # Remove from database"
+  echo "  nimlink                         # Register current directory"
+  echo "  nimlink i mylibrary             # Link mylibrary to project (shorthand)"
+  echo "  nimlink install mylibrary -d    # Add direct path to nim.cfg" 
+  echo "  nimlink u mylibrary             # Remove link from project (shorthand)"
+  echo "  nimlink rm mylibrary            # Remove from database (shorthand)"
 
 proc main() =
   let args = commandLineParams()
@@ -298,29 +344,42 @@ proc main() =
   
   let command = args[0].toLowerAscii()
   
+  # Check for --direct or -d flag
+  var isDirect = false
+  for arg in args:
+    if arg in ["--direct", "-d"]:
+      isDirect = true
+      break
+  
   case command:
-  of "list", "ls":
+  of "list", "ls", "l":
     listCmd()
     
-  of "install":
-    if args.len < 2:
+  of "install", "i":
+    if args.len < 2 or (args[1] in ["--direct", "-d"] and args.len < 3):
       echo "Error: ".red & "No package name specified"
-      echo "Usage: nimlink install PACKAGE".yellow
+      echo "Usage: nimlink install PACKAGE [--direct]".yellow
       return
     
-    let packageName = args[1]
-    installCmd(packageName)
+    let packageName = 
+      if args[1] in ["--direct", "-d"] and args.len >= 3: args[2]
+      else: args[1]
     
-  of "uninstall", "un":
-    if args.len < 2:
+    installCmd(packageName, getCurrentDir(), isDirect)
+    
+  of "uninstall", "un", "u":
+    if args.len < 2 or (args[1] in ["--direct", "-d"] and args.len < 3):
       echo "Error: ".red & "No package name specified"
-      echo "Usage: nimlink uninstall PACKAGE".yellow
+      echo "Usage: nimlink uninstall PACKAGE [--direct]".yellow
       return
     
-    let packageName = args[1]
-    uninstallCmd(packageName)
+    let packageName = 
+      if args[1] in ["--direct", "-d"] and args.len >= 3: args[2]
+      else: args[1]
     
-  of "remove", "rm":
+    uninstallCmd(packageName, getCurrentDir(), isDirect)
+    
+  of "remove", "rm", "r":
     if args.len < 2:
       echo "Error: ".red & "No package name specified"
       echo "Usage: nimlink remove PACKAGE".yellow
@@ -329,7 +388,7 @@ proc main() =
     let packageName = args[1]
     removeCmd(packageName)
     
-  of "help", "-h", "--help":
+  of "help", "-h", "--help", "h":
     showHelp()
     
   else:

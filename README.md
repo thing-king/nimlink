@@ -43,29 +43,34 @@ cd /path/to/your/package
 nimlink
 
 # List registered packages
-nimlink list
+nimlink list  # or: nimlink l
 
 # Install a package in your project
 cd /path/to/your/project
-nimlink install package_name
+nimlink install package_name  # or: nimlink i package_name
+
+# Install without symlinks (direct mode)
+nimlink install package_name -d  # or: nimlink i package_name --direct
 
 # Uninstall a package
-nimlink uninstall package_name
+nimlink uninstall package_name  # or: nimlink u package_name
 
 # Remove a package from the registry
-nimlink remove package_name
+nimlink remove package_name  # or: nimlink rm package_name
 ```
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `nimlink` | Register the current directory as a package |
-| `nimlink list` | List all registered packages |
-| `nimlink install NAME` | Install a package in your project |
-| `nimlink uninstall NAME` | Remove an installed package from your project |
-| `nimlink remove NAME` | Remove a package from the registry database |
-| `nimlink help` | Show help information |
+| Command | Shorthand | Description |
+|---------|-----------|-------------|
+| `nimlink` | | Register the current directory as a package |
+| `nimlink list` | `nimlink l` | List all registered packages |
+| `nimlink install NAME` | `nimlink i NAME` | Install a package in your project |
+| `nimlink install NAME -d` | `nimlink i NAME --direct` | Add package path directly to nim.cfg (no symlinks) |
+| `nimlink uninstall NAME` | `nimlink u NAME` | Remove an installed package from your project |
+| `nimlink uninstall NAME -d` | `nimlink u NAME --direct` | Remove a direct path from nim.cfg |
+| `nimlink remove NAME` | `nimlink rm NAME` | Remove a package from the registry database |
+| `nimlink help` | `nimlink h` | Show help information |
 
 ## How It Works
 
@@ -74,12 +79,17 @@ nimlink remove package_name
    - Extracts `srcDir` if present
    - Stores the information in `~/.nimlink`
 
-2. **Installation**: When you run `nimlink install package_name`:
+2. **Installation**: When you run `nimlink i package_name`:
    - Creates a `nimlinks/` directory in your project
    - Creates a symlink from the package source to `nimlinks/package_name/`
-   - Adds `--path="$projectPath/nimlinks/package_name"` to your project's `nim.cfg`
+   - Adds `--path="nimlinks/package_name"` to your project's `nim.cfg`
 
-3. **Importing**: In your code:
+3. **Direct Mode**: When you run `nimlink i package_name -d`:
+   - Skips creating symlinks entirely
+   - Adds the absolute path directly to nim.cfg: `--path="/path/to/package/src"`
+   - Great for situations where symlinks are problematic
+
+4. **Importing**: In your code:
    - Use `import package_name` from anywhere in your project
    - All changes to the source package are immediately available
 
@@ -100,16 +110,16 @@ export NIMLINK_DIR="vendor"  # Use "vendor" instead of "nimlinks"
 cd ~/projects/mylibrary
 nimlink
 
-# Link it in your application
+# Link it in your application (using shorthand)
 cd ~/projects/myapp
-nimlink install mylibrary
+nimlink i mylibrary
 
 # Now in your application code
 # You can use: import mylibrary
 # Even from subdirectories like tests/
 ```
 
-### Working with multiple libraries
+### Working with multiple libraries (with direct paths)
 
 ```bash
 # Register all your libraries
@@ -118,10 +128,10 @@ nimlink
 cd ~/projects/lib2
 nimlink
 
-# Link them in your project
+# Link them in your project without symlinks (using shorthand)
 cd ~/projects/myproject
-nimlink install lib1
-nimlink install lib2
+nimlink i lib1 -d
+nimlink i lib2 -d
 
 # Use them in your code
 # import lib1
