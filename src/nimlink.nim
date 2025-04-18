@@ -138,7 +138,7 @@ proc nimDevelop() =
   # Create the nimble link file with the correct two-line format
   try:
     # Write both the source directory path and the nimble file path
-    writeFile(linkFile, srcDir & "\n" & nimbleFile)
+    writeFile(linkFile, srcDir & "\n" & nimbleFile & "\n")
     echo "Success: ".green & "Created development link for " & nimbleBaseName.bold.yellow
     echo "Link points to: ".blue & srcDir
     echo "Nimble file: ".blue & nimbleFile
