@@ -11,4 +11,4 @@ bin           = @["nimlink"]
 # Dependencies
 
 requires "nim >= 1.0.0"
-requires "colors"
+requires "colors >= 0.1.3"
